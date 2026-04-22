@@ -19,6 +19,7 @@ env:
 
 jobs:
   publish:
+    if: github.repository_owner == 'c25423'
     name: Build and publish Docker image
     runs-on: ubuntu-latest
     permissions:
