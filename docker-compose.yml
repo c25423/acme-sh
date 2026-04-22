@@ -1,0 +1,13 @@
+services:
+  acme-sh:
+    image: ghcr.io/c25423/acme-sh:3.1.2
+    container_name: acme-sh
+    cap_add:
+      - NET_ADMIN
+    command: daemon
+    network_mode: host
+    restart: no
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./data:/acme.sh
