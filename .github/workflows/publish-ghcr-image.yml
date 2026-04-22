@@ -1,0 +1,98 @@
+name: Publish GHCR image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - Dockerfile
+      - .github/publish-ghcr-image.yml
+
+concurrency:
+  group: publish-ghcr-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    name: Build and publish Docker image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Parse semver from Dockerfile base image
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          from_image="$(awk 'toupper($1)=="FROM"{print $2; exit}' Dockerfile)"
+          if [[ -z "${from_image:-}" ]]; then
+            echo "Unable to find a FROM image in Dockerfile" >&2
+            exit 1
+          fi
+
+          image_ref="${from_image%@*}"
+          image_tag="${image_ref##*:}"
+          if [[ "$image_ref" == "$image_tag" ]]; then
+            echo "Dockerfile base image is missing a tag: $from_image" >&2
+            exit 1
+          fi
+
+          if [[ ! "$image_tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Dockerfile base image tag is not semver: $image_tag" >&2
+            exit 1
+          fi
+
+          normalized="${image_tag#v}"
+          semver="v${normalized}"
+
+          echo "version=${normalized}" >> "$GITHUB_OUTPUT"
+          echo "semver=${semver}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.semver }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.semver }}
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.semver }}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          pull: true
+          push: true
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
